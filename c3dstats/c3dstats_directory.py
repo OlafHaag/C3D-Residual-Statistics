@@ -24,9 +24,9 @@ if __name__ == '__main__':
         print("Analyzing {} files:".format(len(files)))
         for file in files:
             print(file)
-        PROCESSES = min(len(files), 8)
-        print("\nCreating pool with {} processes".format(PROCESSES))
-        p = Pool(processes=PROCESSES, initializer=mute)  # Disable print in subprocesses.
+        n_processes = min(len(files), 8)
+        print("\nCreating pool with {} processes".format(n_processes))
+        p = Pool(processes=n_processes, initializer=mute)  # Disable print in subprocesses.
         try:
             p.imap_unordered(c3d.save_c3dstats, files)
             #res = [p.apply_async(c3d.save_c3dstats, (filename,)) for filename in files]

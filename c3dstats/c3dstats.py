@@ -1,7 +1,9 @@
 ﻿from __future__ import print_function
+import os
 import sys
 import csv
 import warnings
+import argparse
 
 import c3d
 import numpy as np
@@ -10,75 +12,96 @@ from matplotlib.gridspec import GridSpec
 from matplotlib.ticker import FuncFormatter
 import matplotlib.colors
 
+from . import version
+
 
 def read_conditionals(filename):
     """
     Reads a C3D file and returns labels and conditionals on success.
     :param filename: C3D file to read.
     :return: marker labels and an array holding conditional values for marker x frames.
-    :rtype: list, numpy.array or False
+    :rtype: tuple|bool
     """
     try:
-        with open(filename, 'rb') as filehandle:
+        with open(filename, 'rb') as file_handle:
             print("Reading " + filename)
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")  # ignore UserWarning: missing parameter ANALOG:DESCRIPTIONS/LABELS
-                reader = c3d.Reader(filehandle)
-            nframes = reader.last_frame() - reader.first_frame() + 1
-            print("Number of frames in the header info: {}".format(nframes))
+                reader = c3d.Reader(file_handle)
+            n_frames = reader.last_frame() - reader.first_frame() + 1
+            print("Number of frames in the header info: {}".format(n_frames))
             labels = reader.point_labels
-            var_array = np.empty([len(labels), nframes])
-            var_array.fill(np.NAN)
+            conditionals = np.empty([len(labels), n_frames])
+            conditionals.fill(np.NAN)
             for i, points, analog in reader.read_frames():
-                if i > nframes:
+                if i > n_frames:
                     break
-                var_array[:, i-1] = points[:, 3]
-        return labels, var_array
+                conditionals[:, i-1] = points[:, 3]
+        return labels, conditionals
     except IOError:
         print("Error: File {} could not be opened!".format(filename))
         return False
 
 
-def get_conditional_stats(var_array):
-    """Takes array of conditional values frame x marker.
-    Returns a list containing percentage information for conditionals on each label.
-    :type var_array: numpy.array
-    :rtype: numpy.array
+def check_conditionals_input(conditionals):
+    try:
+        shape = conditionals.shape
+    except AttributeError:
+        raise ValueError("Conditionals input must be a numpy array!")
+    if len(shape) != 2:
+        raise ValueError("Conditionals input must be a 2D numpy array!")
+    return True
+
+
+# Todo: use pandas instead of numpy
+def get_conditional_stats(conditionals, thresholds=None):
+    """Takes array of conditional values (frame x marker).
+    Returns a list containing percentage information for conditionals on each point label.
+    :type conditionals: numpy.ndarray
+    :type thresholds: list
+    :rtype: numpy.ndarray
     """
-    num_markers = int(var_array.shape[0])
+    sane_input = check_conditionals_input(conditionals)
+    num_markers = int(conditionals.shape[0])
+
+    if not thresholds:
+        thresholds = [0, 1, 2, 5, 10, 30]
+        
     res = np.empty((num_markers+1, 8), float)
     for i in range(num_markers):
-        cond_eq_0 = 100.0 * np.sum(var_array[i, :] == 0) / var_array.shape[1]
-        cond_le_1 = 100.0 * np.sum(np.logical_and(var_array[i, :] > 0, var_array[i, :] <= 1)) / var_array.shape[1]
-        cond_le_2 = 100.0 * np.sum(np.logical_and(var_array[i, :] > 1, var_array[i, :] <= 2)) / var_array.shape[1]
-        cond_le_5 = 100.0 * np.sum(np.logical_and(var_array[i, :] > 2, var_array[i, :] <= 5)) / var_array.shape[1]
-        cond_le_10 = 100.0 * np.sum(np.logical_and(var_array[i, :] > 5, var_array[i, :] <= 10)) / var_array.shape[1]
-        cond_le_30 = 100.0 * np.sum(np.logical_and(var_array[i, :] > 10, var_array[i, :] <= 30)) / var_array.shape[1]
-        cond_g_30 = 100.0 * np.sum(var_array[i, :] > 30) / var_array.shape[1]
-        missing = 100.0 * np.sum(var_array[i, :] < 0) / var_array.shape[1]
-        res[i] = [cond_eq_0, cond_le_1, cond_le_2, cond_le_5, cond_le_10, cond_le_30, cond_g_30, missing]
+        cond_less_first = np.sum(conditionals[i, :] < thresholds[0])
+        cond_equal_first = np.sum(conditionals[i, :] == thresholds[0])
+        cond_inner = [np.sum(np.logical_and(conditionals[i, :] > thresholds[j], conditionals[i, :] <= thresholds[j+1]))
+                      for j in range(len(thresholds))[:-1]]
+        cond_greater_last = np.sum(conditionals[i, :] > thresholds[-1])
+        res[i] = [cond_equal_first] + cond_inner + [cond_greater_last, cond_less_first]
+        res[i] = res[i] * 100.0 / conditionals.shape[1]
     res[-1] = np.sum(res[:-1, :], axis=0)/num_markers  # Averages
     return res
-    
 
-def get_frame_stats(var_array):
-    """Takes array of conditional values frame x marker.
+
+def get_frame_stats(conditionals, thresholds=None):
+    """Takes array of conditional values (frame x marker).
     Returns a list containing percentage information for conditionals on each frame.
-    :type var_array: numpy.array
+    :type conditionals: numpy.array
+    :type thresholds: list
     :rtype: numpy.array
     """
-    num_frames = int(var_array.shape[1])
+    sane_input = check_conditionals_input(conditionals)
+    num_frames = int(conditionals.shape[1])
+    if not thresholds:
+        thresholds = [0, 1, 2, 5, 10, 30]
+        
     res = np.empty((num_frames, 8), float)
     for i in range(num_frames):
-        cond_eq_0 = 100.0 * np.sum(var_array[:, i] == 0) / var_array.shape[0]
-        cond_le_1 = 100.0 * np.sum(np.logical_and(var_array[:, i] > 0, var_array[:, i] <= 1)) / var_array.shape[0]
-        cond_le_2 = 100.0 * np.sum(np.logical_and(var_array[:, i] > 1, var_array[:, i] <= 2)) / var_array.shape[0]
-        cond_le_5 = 100.0 * np.sum(np.logical_and(var_array[:, i] > 2, var_array[:, i] <= 5)) / var_array.shape[0]
-        cond_le_10 = 100.0 * np.sum(np.logical_and(var_array[:, i] > 5, var_array[:, i] <= 10)) / var_array.shape[0]
-        cond_le_30 = 100.0 * np.sum(np.logical_and(var_array[:, i] > 10, var_array[:, i] <= 30)) / var_array.shape[0]
-        cond_g_30 = 100.0 * np.sum(var_array[:, i] > 30) / var_array.shape[0]
-        missing = 100.0 * np.sum(var_array[:, i] < 0) / var_array.shape[0]
-        res[i] = [cond_eq_0, cond_le_1, cond_le_2, cond_le_5, cond_le_10, cond_le_30, cond_g_30, missing]
+        cond_less_first = np.sum(conditionals[:, i] < thresholds[0])
+        cond_equal_first = np.sum(conditionals[:, i] == thresholds[0])
+        cond_inner = [
+            np.sum(np.logical_and(conditionals[:, i] > thresholds[j], conditionals[:, i] <= thresholds[j + 1]))
+            for j in range(len(thresholds))[:-1]]
+        cond_greater_last = np.sum(conditionals[:, i] > thresholds[-1])
+        res[i] = [cond_equal_first] + cond_inner + [cond_greater_last, cond_less_first]
+        res[i] = res[i] * 100.0 / conditionals.shape[0]
     return res.T
 
 
@@ -93,6 +116,7 @@ def write_stats(labels, stats, **kwargs):
     filename = kwargs.pop('filename', None)
     if kwargs:
         raise TypeError("Unexpected **kwargs: %r" % kwargs)
+    # Todo: use pandas for more flexibility in thresholds.
     try:
         with open(filename, 'wb') as filehandle:
             print("Writing statistics to file {}".format(filename))
@@ -224,18 +248,40 @@ def save_c3dstats(filename):
     else:
         return False
     
+    
+def main(argv=sys.argv[1:]):
+    parser = argparse.ArgumentParser(
+        prog=__file__,
+        description="""Output statistics about residual values in C3D motion capture files.""",
+        formatter_class=argparse.RawTextHelpFormatter)
+    parser.add_argument("-v", "--ver", action='version', version='%(prog)s {}'.format(version))
+    parser.add_argument("input.c3d", nargs='*', type=str, help="C3D files to analyze.")
+    parser.add_argument("-s", "--save", action='store_true', help="Save statistics to files.")
+    
+    args = vars(parser.parse_args(argv))
+    src_filepaths = args['input.c3d']
+    do_save = args['save']
+    
+    res = list()
+    for c3d_file in src_filepaths:
+        if do_save:
+            res.append(save_c3dstats(c3d_file))
+        else:
+            data = read_conditionals(c3d_file)
+            if data:
+                labels = data[0]
+                labels.append('Avg')
+                conditionals = data[1]
+                stats = get_conditional_stats(conditionals)
+                print_stats(labels, stats)
+                plot_all_in_one(conditionals, stats)
+    
+    num_errors = len(res) - sum(res)
+    if num_errors > 0:
+        print("ERROR: {} files could not be processed.".format(num_errors))
+    return False if num_errors else True
+
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        data = read_conditionals(sys.argv[1])
-        if data:
-            labels = data[0]
-            labels.append('Avg')
-            var_array = data[1]
-            stats = get_conditional_stats(var_array)
-            print_stats(labels, stats)
-            plot_all_in_one(var_array, stats)
-    else:
-        print("Prints c3d file statistics on conditionals")
-        print("Usage: c3dstats [filename]")
-
+    exit_code = int(not main())
+    sys.exit(exit_code)
