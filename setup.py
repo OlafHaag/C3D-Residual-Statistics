@@ -22,7 +22,7 @@ setup(name='c3dstats',
       long_description=long_description,
       long_description_content_type='text/markdown',
       author='Olaf Haag',
-      author_email='haag.olaf@gmail.com',
+      author_email='contact@olafhaag.com',
       url='https://github.com/olafhaag/C3D-Statistics',
       classifiers=['License :: OSI Approved :: MIT License',
                    'Programming Language :: Python :: 2.7',
@@ -47,4 +47,3 @@ setup(name='c3dstats',
                     'Source': 'https://github.com/olafhaag/C3D-Statistics/',
                     },
       )
-
